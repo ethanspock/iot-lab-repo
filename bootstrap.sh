@@ -24,16 +24,20 @@ until curl -fsS "${PORTAINER_URL}/api/status" >/dev/null; do sleep 2; done
 read -rsp "Portainer admin password: " PASS
 echo
 
-JWT="$(curl -fsS -X POST "${PORTAINER_URL}/api/auth" \
-  -H "Content-Type: application/json" \
-  -d "{\"Username\":\"admin\",\"Password\":\"$PASS\"}" | jq -r .jwt)"
+LOGIN_PAYLOAD="$(jq -n --arg u "admin" --arg p "$PASS" '{Username:$u, Password:$p}')"
 
-if [[ -z "${JWT}" || "${JWT}" == "null" ]]; then
-  echo "Login failed — create the admin user once via the Portainer UI first."
+JWT="$(curl -fsS -X POST "$PORTAINER_URL/api/auth" \
+  -H "Content-Type: application/json" \
+  -d "$LOGIN_PAYLOAD" | jq -r .jwt)"
+
+if [[ -z "$JWT" || "$JWT" == "null" ]]; then
+  echo "❌ Portainer login failed."
+  echo "➡️  Have you completed the Portainer UI setup at http://<host>:9000 ?"
   exit 1
 fi
 
-AUTH=(-H "Authorization: Bearer ${JWT}" -H "Content-Type: application/json")
+AUTH=(-H "Authorization: Bearer $JWT")
+
 
 # ---------- Host directories (portable, no /mnt hardcoding) ----------
 sudo mkdir -p \
