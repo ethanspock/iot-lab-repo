@@ -9,7 +9,7 @@ A fully reproducible IoT cyber lab including:
 
 ## Quick Start
 ```bash
-git clone https://github.com/<you>/iot-lab.git
+git clone https://github.com/ethanspock/iot-lab-repo.git
 cd iot-lab
 sudo ./install.sh
 ./bootstrap.sh
