@@ -108,19 +108,21 @@ update_stack() {
 }
 
 deploy() {
-  local name="$1"
-  local file="$2"
-  echo "[*] Deploying ${name} from ${file}"
-  local id
-  id="$(get_stack_id "${name}" || true)"
-  if [[ -z "${id}" || "${id}" == "null" ]]; then
-    create_stack "${name}" "${file}" >/dev/null
-    echo "    created"
-  else
-    update_stack "${id}" "${file}" >/dev/null
-    echo "    updated (id=${id})"
-  fi
+  local NAME="$1"
+  local FILE="$2"
+
+  echo "[*] Deploying $NAME from $FILE"
+
+  curl -fsS -X POST \
+    "$PORTAINER_URL/api/stacks/create/standalone/string?endpointId=$ENDPOINT_ID" \
+    "${AUTH[@]}" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n \
+      --arg n "$NAME" \
+      --arg c "$(cat "$FILE")" \
+      '{Name:$n, StackFileContent:$c}')"
 }
+
 
 # ---------- Deploy stacks in dependency order ----------
 deploy iot-lab-core       "${ROOT_DIR}/stacks/iot-lab-core/docker-compose.yml"
