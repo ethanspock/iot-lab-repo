@@ -1,0 +1,17 @@
+%YAML 1.1
+---
+pcap:
+  - interface: br-CHANGE-ME
+    threads: 4
+    promisc: true
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      types:
+        - flow
+        - dns
+        - http
+        - netflow

@@ -1,0 +1,34 @@
+version: "3.9"
+
+networks:
+  lab:
+    external: true
+    name: ${IOTLAB_NET:-lab-test2}
+
+services:
+  thingsboard:
+    image: thingsboard/tb-postgres:latest
+    restart: unless-stopped
+    networks: [lab]
+    ports:
+      - "8081:9090"
+    environment:
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/thingsboard/data:/data
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/thingsboard/logs:/var/log/thingsboard
+
+  tb_bridge:
+    build: ./tb-bridge
+    restart: unless-stopped
+    depends_on: [thingsboard]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MOSQUITTO_HOST=${MQTT_HOST:-mosquitto}
+      - MOSQUITTO_PORT=${MQTT_PORT:-1883}
+      - TB_HOST=${TB_HOST:-thingsboard}
+      - TB_PORT=${TB_MQTT_PORT:-1883}
+      - SUB_TOPIC=sensors/#
+      - INTERVAL_FLUSH_SEC=1.0
+      - TB_GATEWAY_TOKEN=${TB_GATEWAY_TOKEN_CORE:?set TB_GATEWAY_TOKEN_CORE in .env}

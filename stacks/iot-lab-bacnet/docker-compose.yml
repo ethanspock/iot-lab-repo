@@ -1,0 +1,36 @@
+version: "3.9"
+
+networks:
+  lab:
+    external: true
+    name: ${IOTLAB_NET:-lab-test2}
+
+services:
+  nuke_bacnet_sim_01:
+    build: ./bacnet_sim
+    restart: unless-stopped
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - PYTHONUNBUFFERED=1
+      - BACNET_DEVICE_ID=40001
+      - BACNET_DEVICE_NAME=NUKE-PLANT-01
+      - BACNET_BIND=0.0.0.0:47808
+
+  nukeplant_poller:
+    build: ./tb_bridge
+    restart: unless-stopped
+    depends_on: [nuke_bacnet_sim_01]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - PYTHONUNBUFFERED=1
+      - BACNET_BIND=0.0.0.0:47809
+      - BACNET_TARGET=nuke_bacnet_sim_01:47808
+      - POINTS_FILE=/app/points.json
+      - POLL_SECONDS=2
+      - READ_TIMEOUT_SEC=2
+      - TB_MQTT_HOST=${TB_HOST:-thingsboard}
+      - TB_MQTT_PORT=${TB_MQTT_PORT:-1883}
+      - TB_GATEWAY_TOKEN=${TB_GATEWAY_TOKEN_NUKE:?set TB_GATEWAY_TOKEN_NUKE in .env}
+      - TB_DEVICE_NAME=NuclearPlant-Quantico

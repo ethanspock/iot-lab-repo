@@ -1,0 +1,59 @@
+version: "3.9"
+
+networks:
+  lab:
+    external: true
+    name: ${IOTLAB_NET:-lab-test2}
+
+services:
+  windmill_modbus_01:
+    build: ./windmill_modbus
+    restart: unless-stopped
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MODBUS_HOST=0.0.0.0
+      - MODBUS_PORT=5020
+      - MODBUS_UNIT_ID=1
+      - WIND_BASE_MS=8.0
+      - WIND_GUST_MS=4.0
+
+  windmill_modbus_02:
+    build: ./windmill_modbus
+    restart: unless-stopped
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MODBUS_HOST=0.0.0.0
+      - MODBUS_PORT=5020
+      - MODBUS_UNIT_ID=1
+      - WIND_BASE_MS=10.0
+      - WIND_GUST_MS=5.0
+
+  windmill_modbus_03:
+    build: ./windmill_modbus
+    restart: unless-stopped
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MODBUS_HOST=0.0.0.0
+      - MODBUS_PORT=5020
+      - MODBUS_UNIT_ID=1
+      - WIND_BASE_MS=6.0
+      - WIND_GUST_MS=3.0
+
+  windfarm_poller:
+    build: ./windmill_poller
+    restart: unless-stopped
+    depends_on:
+      - windmill_modbus_01
+      - windmill_modbus_02
+      - windmill_modbus_03
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - POLL_INTERVAL_SEC=1
+      - TB_HOST=${TB_HOST:-thingsboard}
+      - TB_MQTT_PORT=${TB_MQTT_PORT:-1883}
+      - TB_GATEWAY_TOKEN=${TB_GATEWAY_TOKEN_WINDFARM:?set TB_GATEWAY_TOKEN_WINDFARM in .env}
+      - WINDMILLS=Windmill-Quantico@windmill_modbus_01:5020:1,Windmill-Pendleton@windmill_modbus_02:5020:1,Windmill-Lejeune@windmill_modbus_03:5020:1

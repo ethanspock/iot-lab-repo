@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  suricata:
+    image: jasonish/suricata:7.0.8
+    network_mode: host
+    cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-UTC}
+    volumes:
+      - /etc/iot-lab/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/suricata/logs:/var/log/suricata
+    command: ["suricata","--pcap","-c","/etc/suricata/suricata.yaml","-vv"]
+
+  evebox:
+    image: jasonish/evebox:latest
+    restart: unless-stopped
+    ports:
+      - "5636:5636"
+    environment:
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/evebox/data:/data
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/suricata/logs:/var/log/suricata:ro
+    command: ["evebox","server","--sqlite","-D","/data","--host","0.0.0.0","--input","/var/log/suricata/eve.json","--end"]

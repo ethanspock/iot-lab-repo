@@ -1,0 +1,9 @@
+[
+  {"key": "reactor_temp_c", "type": "analogValue", "instance": 1},
+  {"key": "core_pressure_bar", "type": "analogValue", "instance": 2},
+  {"key": "coolant_flow_lps", "type": "analogValue", "instance": 3},
+  {"key": "steam_temp_c", "type": "analogValue", "instance": 4},
+  {"key": "turbine_rpm", "type": "analogValue", "instance": 5},
+  {"key": "net_mw", "type": "analogValue", "instance": 6},
+  {"key": "radiation_msvh", "type": "analogValue", "instance": 7}
+]

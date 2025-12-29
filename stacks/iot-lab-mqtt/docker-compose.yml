@@ -1,0 +1,131 @@
+version: "3.9"
+
+networks:
+  lab:
+    external: true
+    name: ${IOTLAB_NET:-lab-test2}
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    networks: [lab]
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/mosquitto/data:/mosquitto/data
+      - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/mosquitto/log:/mosquitto/log
+
+  # One image, many instances (portable)
+  temp_livingroom_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=temperature
+      - ROOM=livingroom
+      - SENSOR_NAME=temp
+      - INTERVAL=5
+
+  temp_kitchen_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=temperature
+      - ROOM=kitchen
+      - SENSOR_NAME=temp
+      - INTERVAL=6
+
+  temp_bedroom_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=temperature
+      - ROOM=bedroom
+      - SENSOR_NAME=temp
+      - INTERVAL=7
+
+  temp_garage_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=temperature
+      - ROOM=garage
+      - SENSOR_NAME=temp
+      - INTERVAL=8
+
+  humidity_kitchen_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=humidity
+      - ROOM=kitchen
+      - SENSOR_NAME=hum
+      - INTERVAL=10
+
+  humidity_bathroom_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=humidity
+      - ROOM=bathroom
+      - SENSOR_NAME=hum
+      - INTERVAL=12
+
+  motion_frontdoor_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=motion
+      - ROOM=frontdoor
+      - SENSOR_NAME=motion
+      - INTERVAL=3
+
+  motion_backyard_01:
+    build: ./fake_sensor
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    networks: [lab]
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER=${MQTT_HOST:-mosquitto}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - SENSOR_TYPE=motion
+      - ROOM=backyard
+      - SENSOR_NAME=motion
+      - INTERVAL=4
