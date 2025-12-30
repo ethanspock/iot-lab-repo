@@ -59,7 +59,7 @@ services:
       POLL_INTERVAL_SEC: 1
       TB_HOST: ${TB_HOST:-thingsboard}
       TB_MQTT_PORT: ${TB_MQTT_PORT:-1883}
-      TB_GATEWAY_TOKEN: ${TB_GATEWAY_TOKEN_WINDFARM:?set TB_GATEWAY_TOKEN_WINDFARM in .env}
+      TB_GATEWAY_TOKEN: ${TB_GATEWAY_TOKEN_WINDFARM:-}
       WINDMILLS: >-
         Windmill-Quantico@windmill_modbus_01:5020:1,
         Windmill-Pendleton@windmill_modbus_02:5020:1,
