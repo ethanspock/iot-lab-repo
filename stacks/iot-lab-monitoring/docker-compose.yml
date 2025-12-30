@@ -9,7 +9,7 @@ services:
     environment:
       - TZ=${TZ:-UTC}
     volumes:
-      - /etc/iot-lab/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ${IOTLAB_ETC_ROOT:-/etc/iot-lab}/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/suricata/logs:/var/log/suricata
     command: ["suricata","--pcap","-c","/etc/suricata/suricata.yaml","-vv"]
 
