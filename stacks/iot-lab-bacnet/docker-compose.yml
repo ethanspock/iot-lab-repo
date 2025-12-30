@@ -34,5 +34,5 @@ services:
       READ_TIMEOUT_SEC: 2
       TB_MQTT_HOST: ${TB_HOST:-thingsboard}
       TB_MQTT_PORT: ${TB_MQTT_PORT:-1883}
-      TB_GATEWAY_TOKEN: ${TB_GATEWAY_TOKEN_NUKE:?set TB_GATEWAY_TOKEN_NUKE in .env}
-      TB_DEVICE_NAME: NuclearPlant-Quantico
+      TB_GATEWAY_TOKEN: ${TB_GATEWAY_TOKEN_NUKE:-}
+      TB_DEVICE_NAME: NuclearPlant
