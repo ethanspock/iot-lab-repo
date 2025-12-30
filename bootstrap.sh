@@ -52,6 +52,9 @@ need_cmd docker
 need_cmd ip
 need_cmd sed
 
+sudo mkdir -p "$IOTLAB_DATA_ROOT/thingsboard/data" "$IOTLAB_DATA_ROOT/thingsboard/logs"
+sudo chmod -R 777 "$IOTLAB_DATA_ROOT/thingsboard"
+
 # -----------------------------
 # Portainer helpers
 # -----------------------------
