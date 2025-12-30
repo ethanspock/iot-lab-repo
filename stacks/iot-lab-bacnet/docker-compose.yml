@@ -7,7 +7,8 @@ networks:
 
 services:
   nuke_bacnet_sim_01:
-    build: ./bacnet_sim
+    build: 
+      context: ./bacnet_sim
     restart: unless-stopped
     networks: [lab]
     environment:
@@ -18,7 +19,8 @@ services:
       - BACNET_BIND=0.0.0.0:47808
 
   nukeplant_poller:
-    build: ./tb_bridge
+    build: 
+      context: ./tb_bridge
     restart: unless-stopped
     depends_on: [nuke_bacnet_sim_01]
     networks: [lab]
