@@ -47,12 +47,30 @@ load_env_file() {
 load_env_file "$REPO_ROOT/.env"
 load_env_file "$REPO_ROOT/.env.generated"
 
-# Normalize REPO_REF for Portainer: "refs/heads/main" -> "main"
-if [[ "${REPO_REF}" == refs/heads/* ]]; then
-  REPO_REF_BRANCH="${REPO_REF#refs/heads/}"
-else
-  REPO_REF_BRANCH="$REPO_REF"
+# Build candidate refs Portainer might accept
+# (Portainer behavior varies: some accept "main", others require "refs/heads/main")
+REF_CANDIDATES=()
+
+if [[ -n "${REPO_REF:-}" ]]; then
+  REF_CANDIDATES+=("$REPO_REF")
 fi
+
+# If user provided "main", also try refs/heads/main
+if [[ "${REPO_REF:-}" != refs/heads/* && -n "${REPO_REF:-}" ]]; then
+  REF_CANDIDATES+=("refs/heads/$REPO_REF")
+fi
+
+# If user provided refs/heads/main, also try "main"
+if [[ "${REPO_REF:-}" == refs/heads/* ]]; then
+  REF_CANDIDATES+=("${REPO_REF#refs/heads/}")
+fi
+
+# Last-resort defaults
+REF_CANDIDATES+=("refs/heads/main" "main" "refs/heads/master" "master")
+
+# De-dupe while preserving order
+REF_CANDIDATES=($(printf "%s\n" "${REF_CANDIDATES[@]}" | awk '!seen[$0]++'))
+
 
 # ------------------------------------------------------------
 # Helpers
@@ -213,35 +231,48 @@ create_repo_stack() {
   local name="$1"
   local compose_path="$2"
 
-  local payload
-  payload="$(jq -n \
-    --arg Name "$name" \
-    --arg RepositoryURL "$REPO_URL" \
-    --arg RepositoryReferenceName "$REPO_REF_BRANCH" \
-    --arg ComposePath "$compose_path" \
-    --arg IOTLAB_DATA_ROOT "$IOTLAB_DATA_ROOT" \
-    --arg IOTLAB_ETC_ROOT "$IOTLAB_ETC_ROOT" \
-    --arg IOTLAB_NET "$IOTLAB_NET" \
-    '{
-      Name: $Name,
-      RepositoryURL: $RepositoryURL,
-      RepositoryReferenceName: $RepositoryReferenceName,
-      RepositoryAuthentication: false,
-      ComposeFilePathInRepository: $ComposePath,
-      ComposeFile: $ComposePath,
-      Env: [
-        {name:"IOTLAB_DATA_ROOT", value:$IOTLAB_DATA_ROOT},
-        {name:"IOTLAB_ETC_ROOT",  value:$IOTLAB_ETC_ROOT},
-        {name:"IOTLAB_NET",       value:$IOTLAB_NET}
-      ]
-    }')"
+  for ref in "${REF_CANDIDATES[@]}"; do
+    echo "[*] Creating repo stack via Portainer: $name"
+    echo "    ref:   $ref"
+    echo "    file:  $compose_path"
 
-  echo "[*] Creating repo stack via Portainer: $name"
-  echo "    ref:   $REPO_REF_BRANCH"
-  echo "    file:  $compose_path"
+    local payload
+    payload="$(jq -n \
+      --arg Name "$name" \
+      --arg RepositoryURL "$REPO_URL" \
+      --arg RepositoryReferenceName "$ref" \
+      --arg ComposePath "$compose_path" \
+      --arg IOTLAB_DATA_ROOT "$IOTLAB_DATA_ROOT" \
+      --arg IOTLAB_ETC_ROOT "$IOTLAB_ETC_ROOT" \
+      --arg IOTLAB_NET "$IOTLAB_NET" \
+      '{
+        Name: $Name,
+        RepositoryURL: $RepositoryURL,
+        RepositoryReferenceName: $RepositoryReferenceName,
+        RepositoryAuthentication: false,
+        ComposeFilePathInRepository: $ComposePath,
+        ComposeFile: $ComposePath,
+        Env: [
+          {name:"IOTLAB_DATA_ROOT", value:$IOTLAB_DATA_ROOT},
+          {name:"IOTLAB_ETC_ROOT",  value:$IOTLAB_ETC_ROOT},
+          {name:"IOTLAB_NET",       value:$IOTLAB_NET}
+        ]
+      }')"
 
-  http_portainer POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null
+    # try create
+    if http_portainer POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null; then
+      echo "[*] Created stack '$name' with ref '$ref'"
+      return 0
+    fi
+
+    # If ref not found, try next; if it's some other error, still try next (safe)
+    echo "[!] Create failed for '$name' with ref '$ref' — trying next ref..." >&2
+  done
+
+  echo "[!] All ref candidates failed for stack '$name'." >&2
+  return 1
 }
+
 
 update_repo_stack() {
   local name="$1"
