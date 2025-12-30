@@ -8,7 +8,9 @@ Deployable IoT/OT Lab environment containing:
 - Suricata + EveBox network monitoring
 
 # Notes for Setup
-Portainer will need to be manually initalized with the username and password prior to running bootstap.sh. Navigate to http://127.0.0.1:9000 and set the credentials then proceed with the bootstrap.sh to finish lab creation.
+ - Run the below quick start script
+ - Portainer will need to be manually configured with the username and password prior to running bootstap.sh. Navigate to http://127.0.0.1:9000 and set the credentials then proceed with the bootstrap.sh to finish lab creation.
+ - Run bootstrap.sh
 
 ## Quick Start
 ```bash
