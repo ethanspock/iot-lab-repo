@@ -244,13 +244,18 @@ create_repo_stack() {
     --arg Name "$name" \
     --arg RepositoryURL "$REPO_URL" \
     --arg RepositoryReferenceName "$REPO_REF" \
+    --arg ComposeFile "$compose_path" \
     --arg ComposeFilePathInRepository "$compose_path" \
     --argjson Env "$ENV_JSON" \
     '{
       Name: $Name,
       RepositoryURL: $RepositoryURL,
       RepositoryReferenceName: $RepositoryReferenceName,
+
+      # Compatibility: different Portainer versions use different keys
+      ComposeFile: $ComposeFile,
       ComposeFilePathInRepository: $ComposeFilePathInRepository,
+
       Env: $Env
     }')"
 
@@ -258,6 +263,7 @@ create_repo_stack() {
     "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" \
     "$payload" >/dev/null
 }
+
 
 ### ----------------------------
 ### Deploy all stacks
