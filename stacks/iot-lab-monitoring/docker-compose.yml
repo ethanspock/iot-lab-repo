@@ -7,7 +7,7 @@ services:
     cap_add: [NET_ADMIN, NET_RAW, SYS_NICE]
     restart: unless-stopped
     environment:
-      - TZ=${TZ:-UTC}
+      TZ: ${TZ:-UTC}
     volumes:
       - ${IOTLAB_ETC_ROOT:-/etc/iot-lab}/suricata/suricata.yaml:/etc/suricata/suricata.yaml:ro
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/suricata/logs:/var/log/suricata
@@ -17,9 +17,9 @@ services:
     image: jasonish/evebox:latest
     restart: unless-stopped
     ports:
-      - "5636:5636"
+      - "${EVEBOX_PORT:-5636}:5636"
     environment:
-      - TZ=${TZ:-UTC}
+      TZ: ${TZ:-UTC}
     volumes:
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/evebox/data:/data
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/suricata/logs:/var/log/suricata:ro
