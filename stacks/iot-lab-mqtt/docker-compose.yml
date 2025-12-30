@@ -10,6 +10,8 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     networks: [lab]
+      aliases:
+        - mosquitto
     ports:
       - "1883:1883"
     volumes:
