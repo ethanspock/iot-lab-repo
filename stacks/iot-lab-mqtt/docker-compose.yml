@@ -13,7 +13,7 @@ services:
     ports:
       - "1883:1883"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${IOTLAB_ETC_ROOT:-/etc/iot-lab}/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/mosquitto/data:/mosquitto/data
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/mosquitto/log:/mosquitto/log
 
