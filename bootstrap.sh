@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# =========================
-# User-tunable defaults
-# =========================
+### ----------------------------
+### Config (override via env)
+### ----------------------------
 PORTAINER_URL="${PORTAINER_URL:-http://127.0.0.1:9000}"
-ENDPOINT_NAME="${ENDPOINT_NAME:-local}"
-
+ADMIN_USER="${ADMIN_USER:-admin}"
 IOTLAB_NET="${IOTLAB_NET:-lab-test2}"
+
+# Where data/config live on the host
 IOTLAB_DATA_ROOT="${IOTLAB_DATA_ROOT:-/opt/iot-lab}"
 IOTLAB_ETC_ROOT="${IOTLAB_ETC_ROOT:-/etc/iot-lab}"
-TZ="${TZ:-UTC}"
 
+# Repo info (override if you fork)
 REPO_URL="${REPO_URL:-https://github.com/ethanspock/iot-lab-repo.git}"
-REPO_REF="${REPO_REF:-refs/heads/main}"   # change if your default branch isn't main
+REPO_REF="${REPO_REF:-refs/heads/main}"
 
-# Stacks (Portainer will clone repo; ComposeFilePathInRepository must be correct)
-STACKS=(
+# Stacks and their compose file path within the repo
+declare -a STACKS=(
   "iot-lab-core:stacks/iot-lab-core/docker-compose.yml"
   "iot-lab-mqtt:stacks/iot-lab-mqtt/docker-compose.yml"
   "iot-lab-modbus:stacks/iot-lab-modbus/docker-compose.yml"
@@ -24,16 +25,61 @@ STACKS=(
   "iot-lab-monitoring:stacks/iot-lab-monitoring/docker-compose.yml"
 )
 
-# =========================
-# Helpers
-# =========================
-die(){ echo "[!] $*" >&2; exit 1; }
-info(){ echo "[*] $*"; }
+### ----------------------------
+### Helpers
+### ----------------------------
+repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
+ROOT="$(repo_root)"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$REPO_ROOT"
+info() { echo "[*] $*"; }
+warn() { echo "[!] $*" >&2; }
+die()  { echo "[x] $*" >&2; exit 1; }
 
-info "Repo root: $REPO_ROOT"
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"; }
+
+http_json() {
+  # http_json METHOD URL DATA(optional)
+  local method="$1"; shift
+  local url="$1"; shift
+  local data="${1:-}"
+
+  local tmp http
+  tmp="$(mktemp)"
+  if [[ -n "$data" ]]; then
+    http="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" \
+      -H "Content-Type: application/json" \
+      "${AUTH[@]:-}" \
+      "$url" \
+      -d "$data" || true)"
+  else
+    http="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" \
+      "${AUTH[@]:-}" \
+      "$url" || true)"
+  fi
+
+  if [[ "$http" -lt 200 || "$http" -ge 300 ]]; then
+    warn "HTTP $http for $method $url"
+    echo "---- response body ----" >&2
+    cat "$tmp" >&2 || true
+    echo >&2
+    echo "-----------------------" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+### ----------------------------
+### Preflight
+### ----------------------------
+need_cmd curl
+need_cmd jq
+need_cmd docker
+need_cmd git
+
+info "Repo root: $ROOT"
 info "Portainer:  $PORTAINER_URL"
 info "Data root:  $IOTLAB_DATA_ROOT"
 info "Etc  root:  $IOTLAB_ETC_ROOT"
@@ -41,46 +87,64 @@ info "Network:    $IOTLAB_NET"
 info "Repo URL:   $REPO_URL"
 info "Repo REF:   $REPO_REF"
 
-command -v jq >/dev/null || die "jq is required (apt-get install -y jq)"
-command -v curl >/dev/null || die "curl is required"
-
-# Load .env if present (for TB tokens etc)
-if [[ -f "$REPO_ROOT/.env" ]]; then
+# Load .env if present
+if [[ -f "$ROOT/.env" ]]; then
   info "Loading .env"
-  # shellcheck disable=SC2046
-  export $(grep -v '^\s*#' "$REPO_ROOT/.env" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' | xargs -d '\n' -r)
-else
-  info "No .env found at repo root (recommended)."
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
 fi
 
-# Verify required vars (your compose uses :? guards)
+# Validate required tokens exist (your compose uses :? which will fail otherwise)
 : "${TB_GATEWAY_TOKEN_CORE:?set TB_GATEWAY_TOKEN_CORE in .env}"
 : "${TB_GATEWAY_TOKEN_WINDFARM:?set TB_GATEWAY_TOKEN_WINDFARM in .env}"
 : "${TB_GATEWAY_TOKEN_NUKE:?set TB_GATEWAY_TOKEN_NUKE in .env}"
 
-# Wait for Portainer
+### ----------------------------
+### Wait for Portainer
+### ----------------------------
 info "Waiting for Portainer API..."
 until curl -fsS "$PORTAINER_URL/api/status" >/dev/null; do sleep 2; done
-PORT_VER="$(curl -fsS "$PORTAINER_URL/api/status" | jq -r '.Version')"
-info "Portainer version: $PORT_VER"
+VER="$(curl -fsS "$PORTAINER_URL/api/status" | jq -r '.Version')"
+info "Portainer version: $VER"
 
+### ----------------------------
+### Admin init (fresh installs)
+### ----------------------------
 read -rsp "Portainer admin password: " PASS; echo
+
+# Try init (safe: will fail on already-initialized installs)
+INIT_PAYLOAD="$(jq -n --arg u "$ADMIN_USER" --arg p "$PASS" '{Username:$u,Password:$p}')"
+if ! curl -sS -o /dev/null -w "%{http_code}" -X POST \
+  "$PORTAINER_URL/api/users/admin/init" \
+  -H "Content-Type: application/json" \
+  -d "$INIT_PAYLOAD" | grep -qE '^(2|4)'; then
+  # If Portainer is weird, we don't die here; auth will tell us
+  warn "Admin init call returned unexpected status (continuing)."
+fi
+
+### ----------------------------
+### Authenticate
+### ----------------------------
+AUTH_PAYLOAD="$(jq -n --arg u "$ADMIN_USER" --arg p "$PASS" '{Username:$u,Password:$p}')"
 JWT="$(curl -fsS -X POST "$PORTAINER_URL/api/auth" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --arg u admin --arg p "$PASS" '{Username:$u,Password:$p}')" \
-  | jq -r .jwt)"
+  -d "$AUTH_PAYLOAD" | jq -r .jwt)"
 
-[[ -n "$JWT" && "$JWT" != "null" ]] || die "Login failed (admin not created yet? create once in UI)."
+[[ -n "$JWT" && "$JWT" != "null" ]] || die "Login failed (check admin password / UI init)."
 AUTH=(-H "Authorization: Bearer $JWT")
 
-# Find endpointId by name
-ENDPOINT_ID="$(curl -fsS "$PORTAINER_URL/api/endpoints" "${AUTH[@]}" \
-  | jq -r --arg n "$ENDPOINT_NAME" '.[] | select(.Name==$n) | .Id' | head -n1)"
-
-[[ -n "$ENDPOINT_ID" && "$ENDPOINT_ID" != "null" ]] || die "Could not find endpoint named '$ENDPOINT_NAME'"
+### ----------------------------
+### Discover endpoint ID
+### ----------------------------
+ENDPOINT_ID="$(http_json GET "$PORTAINER_URL/api/endpoints" | jq -r '.[0].Id')"
+[[ -n "$ENDPOINT_ID" && "$ENDPOINT_ID" != "null" ]] || die "No endpoints found in Portainer."
 info "Using endpointId: $ENDPOINT_ID"
 
-# Create host directories
+### ----------------------------
+### Host directories
+### ----------------------------
 info "Creating host directories..."
 sudo mkdir -p \
   "$IOTLAB_DATA_ROOT/thingsboard/data" \
@@ -91,7 +155,12 @@ sudo mkdir -p \
   "$IOTLAB_DATA_ROOT/evebox/data" \
   "$IOTLAB_ETC_ROOT/suricata"
 
-# Ensure network exists
+# Give docker containers access
+sudo chmod -R a+rwx "$IOTLAB_DATA_ROOT" || true
+
+### ----------------------------
+### Ensure docker network exists
+### ----------------------------
 info "Ensuring docker network exists: $IOTLAB_NET"
 if docker network inspect "$IOTLAB_NET" >/dev/null 2>&1; then
   echo "    already exists"
@@ -100,103 +169,110 @@ else
   echo "    created"
 fi
 
-# Derive bridge name for Suricata
+# Determine bridge interface name for Suricata capture
 NET_ID="$(docker network inspect "$IOTLAB_NET" --format '{{slice .Id 0 12}}')"
-SURICATA_IFACE="br-${NET_ID}"
-info "Suricata capture interface: $SURICATA_IFACE"
+BR_IF="br-${NET_ID}"
+info "Suricata capture interface: $BR_IF"
 
-# Install Suricata config (replace br-CHANGE-ME)
-SRC_SURICATA_CFG="$REPO_ROOT/configs/suricata/suricata.yaml"
-DST_SURICATA_CFG="$IOTLAB_ETC_ROOT/suricata/suricata.yaml"
-[[ -f "$SRC_SURICATA_CFG" ]] || die "Missing $SRC_SURICATA_CFG"
+### ----------------------------
+### Install Suricata config (portable)
+### ----------------------------
+SURICATA_SRC="$ROOT/configs/suricata/suricata.yaml"
+SURICATA_DST="$IOTLAB_ETC_ROOT/suricata/suricata.yaml"
 
-info "Installing Suricata config to $DST_SURICATA_CFG"
-sudo cp "$SRC_SURICATA_CFG" "$DST_SURICATA_CFG"
-sudo sed -i "s/^  - interface: br-CHANGE-ME/  - interface: ${SURICATA_IFACE}/" "$DST_SURICATA_CFG"
+[[ -f "$SURICATA_SRC" ]] || die "Missing $SURICATA_SRC"
 
-# Build stack Env array for Portainer (from current environment)
-mk_env_json() {
-  # Only send the variables your lab actually uses (keeps it clean + predictable)
-  local keys=(
-    TZ
-    IOTLAB_NET IOTLAB_DATA_ROOT IOTLAB_ETC_ROOT
-    TB_HOST TB_MQTT_PORT TB_GATEWAY_TOKEN_CORE TB_GATEWAY_TOKEN_WINDFARM TB_GATEWAY_TOKEN_NUKE
-    MQTT_HOST MQTT_PORT
-  )
-  jq -n --argjson keys "$(printf '%s\n' "${keys[@]}" | jq -R . | jq -s .)" '
-    [ $keys[] as $k
-      | (env[$k] // empty) as $v
-      | select($v != "")
-      | { name: $k, value: $v }
-    ]'
+info "Installing Suricata config to $SURICATA_DST"
+sudo sed "s/br-CHANGE-ME/$BR_IF/g" "$SURICATA_SRC" | sudo tee "$SURICATA_DST" >/dev/null
+
+### ----------------------------
+### Env list for Portainer stack deploy
+### ----------------------------
+ENV_JSON="$(jq -n \
+  --arg TZ "${TZ:-UTC}" \
+  --arg IOTLAB_NET "$IOTLAB_NET" \
+  --arg IOTLAB_DATA_ROOT "$IOTLAB_DATA_ROOT" \
+  --arg IOTLAB_ETC_ROOT "$IOTLAB_ETC_ROOT" \
+  --arg TB_HOST "${TB_HOST:-thingsboard}" \
+  --arg TB_MQTT_PORT "${TB_MQTT_PORT:-1883}" \
+  --arg MQTT_HOST "${MQTT_HOST:-mosquitto}" \
+  --arg MQTT_PORT "${MQTT_PORT:-1883}" \
+  --arg TB_GATEWAY_TOKEN_CORE "$TB_GATEWAY_TOKEN_CORE" \
+  --arg TB_GATEWAY_TOKEN_WINDFARM "$TB_GATEWAY_TOKEN_WINDFARM" \
+  --arg TB_GATEWAY_TOKEN_NUKE "$TB_GATEWAY_TOKEN_NUKE" \
+'[
+  {name:"TZ", value:$TZ},
+  {name:"IOTLAB_NET", value:$IOTLAB_NET},
+  {name:"IOTLAB_DATA_ROOT", value:$IOTLAB_DATA_ROOT},
+  {name:"IOTLAB_ETC_ROOT", value:$IOTLAB_ETC_ROOT},
+  {name:"TB_HOST", value:$TB_HOST},
+  {name:"TB_MQTT_PORT", value:$TB_MQTT_PORT},
+  {name:"MQTT_HOST", value:$MQTT_HOST},
+  {name:"MQTT_PORT", value:$MQTT_PORT},
+  {name:"TB_GATEWAY_TOKEN_CORE", value:$TB_GATEWAY_TOKEN_CORE},
+  {name:"TB_GATEWAY_TOKEN_WINDFARM", value:$TB_GATEWAY_TOKEN_WINDFARM},
+  {name:"TB_GATEWAY_TOKEN_NUKE", value:$TB_GATEWAY_TOKEN_NUKE}
+]')"
+
+### ----------------------------
+### Stack ops: delete if exists, then create from repo
+### ----------------------------
+get_stack_id_by_name() {
+  local name="$1"
+  http_json GET "$PORTAINER_URL/api/stacks" | jq -r --arg n "$name" '.[] | select(.Name==$n) | .Id' | head -n1
 }
 
-ENV_JSON="$(mk_env_json)"
+delete_stack_if_exists() {
+  local name="$1"
+  local id
+  id="$(get_stack_id_by_name "$name" || true)"
+  if [[ -n "$id" && "$id" != "null" ]]; then
+    info "Deleting existing stack: $name (id=$id)"
+    # Portainer supports endpointId on delete for standalone stacks
+    http_json DELETE "$PORTAINER_URL/api/stacks/$id?endpointId=$ENDPOINT_ID" >/dev/null || true
+  fi
+}
 
-# Deploy (create or update) a repository stack
-deploy_repo_stack() {
+create_repo_stack() {
   local name="$1"
   local compose_path="$2"
 
-  info "Deploying stack: $name ($compose_path)"
+  info "Creating stack: $name ($compose_path)"
 
-  # Check if stack exists
-  local existing_id
-  existing_id="$(curl -fsS "$PORTAINER_URL/api/stacks" "${AUTH[@]}" \
-    | jq -r --arg n "$name" '.[] | select(.Name==$n) | .Id' | head -n1)"
-
-  if [[ -n "$existing_id" && "$existing_id" != "null" ]]; then
-    info "  Stack exists (id=$existing_id) -> updating via git pull + redeploy"
-    # Update endpoint (Portainer uses /stacks/{id}/git/redeploy for repo stacks)
-    curl -fsS -X POST \
-      "$PORTAINER_URL/api/stacks/$existing_id/git/redeploy?endpointId=$ENDPOINT_ID" \
-      "${AUTH[@]}" \
-      -H "Content-Type: application/json" \
-      -d "$(jq -n --arg ref "$REPO_REF" --argjson env "$ENV_JSON" \
-        '{RepositoryReferenceName:$ref, Env:$env}')" \
-      >/dev/null
-    echo "  updated"
-    return
-  fi
-
-  # Create repo stack
-  # NOTE: repo auth omitted (public repo). For private, add RepositoryAuthentication + credentials.
   local payload
   payload="$(jq -n \
-    --arg name "$name" \
-    --arg url "$REPO_URL" \
-    --arg ref "$REPO_REF" \
-    --arg cpath "$compose_path" \
-    --argjson env "$ENV_JSON" \
+    --arg Name "$name" \
+    --arg RepositoryURL "$REPO_URL" \
+    --arg RepositoryReferenceName "$REPO_REF" \
+    --arg ComposeFilePathInRepository "$compose_path" \
+    --argjson Env "$ENV_JSON" \
     '{
-      Name: $name,
-      RepositoryURL: $url,
-      RepositoryReferenceName: $ref,
-      ComposeFilePathInRepository: $cpath,
-      Env: $env
+      Name: $Name,
+      RepositoryURL: $RepositoryURL,
+      RepositoryReferenceName: $RepositoryReferenceName,
+      ComposeFilePathInRepository: $ComposeFilePathInRepository,
+      Env: $Env
     }')"
 
-  curl -fsS -X POST \
+  http_json POST \
     "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" \
-    "${AUTH[@]}" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    >/dev/null
-
-  echo "  created"
+    "$payload" >/dev/null
 }
 
-# Export defaults so compose interpolation matches your YAML
-export TZ IOTLAB_NET IOTLAB_DATA_ROOT IOTLAB_ETC_ROOT
+### ----------------------------
+### Deploy all stacks
+### ----------------------------
+for entry in "${STACKS[@]}"; do
+  name="${entry%%:*}"
+  path="${entry#*:}"
 
-# Deploy all stacks
-for item in "${STACKS[@]}"; do
-  name="${item%%:*}"
-  path="${item#*:}"
-  [[ -f "$REPO_ROOT/$path" ]] || die "Missing compose file: $path"
-  deploy_repo_stack "$name" "$path"
+  # sanity: repo paths must exist locally (helps catch typos)
+  [[ -f "$ROOT/$path" ]] || die "Compose path not found in repo: $path"
+
+  delete_stack_if_exists "$name"
+  create_repo_stack "$name" "$path"
 done
 
 info "Done."
 info "ThingsBoard: http://<host>:8081"
-info "EveBox:      https://<host>:5636   (self-signed TLS; your browser will warn)"
+info "EveBox:      https://<host>:5636  (TLS enabled by EveBox; use https)"
