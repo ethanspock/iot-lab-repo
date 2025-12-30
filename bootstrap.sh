@@ -1,176 +1,229 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ------------------------------------------------------------
-# Config (override via .env)
-# ------------------------------------------------------------
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "[*] Repo root: $REPO_ROOT"
+cd "$REPO_ROOT"
 
+# -----------------------------
+# Config (override via .env)
+# -----------------------------
 PORTAINER_URL="${PORTAINER_URL:-http://127.0.0.1:9000}"
-
 IOTLAB_DATA_ROOT="${IOTLAB_DATA_ROOT:-/opt/iot-lab}"
 IOTLAB_ETC_ROOT="${IOTLAB_ETC_ROOT:-/etc/iot-lab}"
 IOTLAB_NET="${IOTLAB_NET:-lab-test2}"
 
-# Portainer "repository stack" deploy settings
 REPO_URL="${REPO_URL:-https://github.com/ethanspock/iot-lab-repo.git}"
-REPO_REF="${REPO_REF:-refs/heads/main}"        # we'll normalize to "main"
+# IMPORTANT: Portainer often wants refs/heads/<branch>
+REPO_REF="${REPO_REF:-refs/heads/main}"
 
-# Behavior:
-# 0 = skip existing stacks
-# 1 = update existing stacks via Portainer API
-UPDATE_EXISTING="${UPDATE_EXISTING:-0}"
+# ThingsBoard (your compose maps 8081 -> 9090)
+TB_HTTP="${TB_HTTP:-http://127.0.0.1:8081}"
+TB_TENANT_USER="${TB_TENANT_USER:-tenant@thingsboard.org}"
+TB_TENANT_PASS="${TB_TENANT_PASS:-tenant}"
 
-# Stacks in order (core first)
-STACKS=(
-  "iot-lab-core:stacks/iot-lab-core/docker-compose.yml"
-  "iot-lab-mqtt:stacks/iot-lab-mqtt/docker-compose.yml"
-  "iot-lab-modbus:stacks/iot-lab-modbus/docker-compose.yml"
-  "iot-lab-bacnet:stacks/iot-lab-bacnet/docker-compose.yml"
-  "iot-lab-monitoring:stacks/iot-lab-monitoring/docker-compose.yml"
-)
+# Stacks in order (repo paths)
+STACK_CORE_NAME="iot-lab-core"
+STACK_MQTT_NAME="iot-lab-mqtt"
+STACK_MODBUS_NAME="iot-lab-modbus"
+STACK_BACNET_NAME="iot-lab-bacnet"
+STACK_MON_NAME="iot-lab-monitoring"
 
-# ------------------------------------------------------------
-# Load .env + .env.generated if present
-# ------------------------------------------------------------
-load_env_file() {
-  local f="$1"
-  if [[ -f "$f" ]]; then
-    echo "[*] Loading $(basename "$f")"
-    set -a
-    # shellcheck disable=SC1090
-    source "$f"
-    set +a
-  fi
-}
-load_env_file "$REPO_ROOT/.env"
-load_env_file "$REPO_ROOT/.env.generated"
+STACK_CORE_FILE="stacks/iot-lab-core/docker-compose.yml"
+STACK_MQTT_FILE="stacks/iot-lab-mqtt/docker-compose.yml"
+STACK_MODBUS_FILE="stacks/iot-lab-modbus/docker-compose.yml"
+STACK_BACNET_FILE="stacks/iot-lab-bacnet/docker-compose.yml"
+STACK_MON_FILE="stacks/iot-lab-monitoring/docker-compose.yml"
 
-# Build candidate refs Portainer might accept
-# (Portainer behavior varies: some accept "main", others require "refs/heads/main")
-REF_CANDIDATES=()
-
-if [[ -n "${REPO_REF:-}" ]]; then
-  REF_CANDIDATES+=("$REPO_REF")
+# -----------------------------
+# Load .env if present
+# -----------------------------
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  echo "[*] Loading .env"
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+  set +a
 fi
 
-# If user provided "main", also try refs/heads/main
-if [[ "${REPO_REF:-}" != refs/heads/* && -n "${REPO_REF:-}" ]]; then
-  REF_CANDIDATES+=("refs/heads/$REPO_REF")
-fi
-
-# If user provided refs/heads/main, also try "main"
-if [[ "${REPO_REF:-}" == refs/heads/* ]]; then
-  REF_CANDIDATES+=("${REPO_REF#refs/heads/}")
-fi
-
-# Last-resort defaults
-REF_CANDIDATES+=("refs/heads/main" "main" "refs/heads/master" "master")
-
-# De-dupe while preserving order
-REF_CANDIDATES=($(printf "%s\n" "${REF_CANDIDATES[@]}" | awk '!seen[$0]++'))
-
-
-# ------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[!] Missing: $1" >&2; exit 1; }; }
-
-# Portainer HTTP helper with better errors
-http_portainer() {
-  local method="$1"; shift
-  local url="$1"; shift
-  local body="${1:-}"
-
-  local tmp code
-  tmp="$(mktemp)"
-
-  if [[ -n "$body" ]]; then
-    code="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" "$url" \
-      -H "Authorization: Bearer $JWT" \
-      -H "Content-Type: application/json" \
-      -d "$body" || true)"
-  else
-    code="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" "$url" \
-      -H "Authorization: Bearer $JWT" || true)"
-  fi
-
-  if [[ "$code" -ge 200 && "$code" -lt 300 ]]; then
-    cat "$tmp"
-    rm -f "$tmp"
-    return 0
-  fi
-
-  echo "[!] HTTP $code for $method $url" >&2
-  if [[ -s "$tmp" ]]; then
-    echo "---- response body ----" >&2
-    cat "$tmp" >&2
-    echo -e "\n-----------------------" >&2
-  fi
-  rm -f "$tmp"
-  return 1
-}
-
-get_stack_id_by_name() {
-  local name="$1"
-  curl -sS "$PORTAINER_URL/api/stacks" -H "Authorization: Bearer $JWT" \
-    | jq -r --arg n "$name" '.[] | select(.Name==$n) | .Id' \
-    | head -n 1
-}
-
-stack_exists() {
-  local name="$1"
-  local id
-  id="$(get_stack_id_by_name "$name")"
-  [[ -n "$id" && "$id" != "null" ]]
-}
-
-# ------------------------------------------------------------
-# Preconditions
-# ------------------------------------------------------------
 need_cmd curl
 need_cmd jq
 need_cmd docker
 need_cmd ip
 need_cmd sed
-need_cmd awk
-need_cmd sudo
 
-# ------------------------------------------------------------
-# Wait for Portainer + auth
-# ------------------------------------------------------------
-echo "[*] Waiting for Portainer API..."
-until curl -fsS "$PORTAINER_URL/api/status" >/dev/null; do sleep 2; done
-VER="$(curl -fsS "$PORTAINER_URL/api/status" | jq -r .Version)"
-echo "[*] Portainer version: $VER"
+# -----------------------------
+# Portainer helpers
+# -----------------------------
+http_p() {
+  # usage: http_p METHOD URL [JSON_BODY]
+  local method="$1"; shift
+  local url="$1"; shift
+  local body="${1:-}"
+  local tmp; tmp="$(mktemp)"
+  local code
+  if [[ -n "$body" ]]; then
+    code="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" "$url" \
+      -H "Authorization: Bearer $PJWT" \
+      -H "Content-Type: application/json" \
+      -d "$body" || true)"
+  else
+    code="$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" "$url" \
+      -H "Authorization: Bearer $PJWT" || true)"
+  fi
+  if [[ "$code" -ge 200 && "$code" -lt 300 ]]; then
+    cat "$tmp"; rm -f "$tmp"; return 0
+  fi
+  echo "[!] Portainer HTTP $code: $method $url" >&2
+  if [[ -s "$tmp" ]]; then
+    echo "---- response body ----" >&2
+    cat "$tmp" >&2
+    echo "-----------------------" >&2
+  fi
+  rm -f "$tmp"
+  return 1
+}
 
-read -rsp "Portainer admin password: " PASS
-echo
+portainer_wait() {
+  echo "[*] Waiting for Portainer API..."
+  until curl -fsS "$PORTAINER_URL/api/status" >/dev/null 2>&1; do sleep 2; done
+  echo "[*] Portainer version: $(curl -fsS "$PORTAINER_URL/api/status" | jq -r .Version)"
+}
 
-JWT="$(curl -sS -X POST "$PORTAINER_URL/api/auth" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg u admin --arg p "$PASS" '{Username:$u,Password:$p}')" \
-  | jq -r .jwt)"
+portainer_auth() {
+  read -rsp "Portainer admin password: " PASS; echo
+  PJWT="$(curl -sS -X POST "$PORTAINER_URL/api/auth" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg u admin --arg p "$PASS" '{Username:$u,Password:$p}')" \
+    | jq -r .jwt)"
+  if [[ -z "$PJWT" || "$PJWT" == "null" ]]; then
+    echo "[!] Portainer login failed. Initialize admin first." >&2
+    exit 1
+  fi
 
-if [[ -z "$JWT" || "$JWT" == "null" ]]; then
-  echo "[!] Login failed. Initialize admin via UI or /api/users/admin/init first." >&2
-  exit 1
-fi
+  ENDPOINT_ID="$(curl -sS "$PORTAINER_URL/api/endpoints" -H "Authorization: Bearer $PJWT" | jq -r '.[0].Id')"
+  if [[ -z "$ENDPOINT_ID" || "$ENDPOINT_ID" == "null" ]]; then
+    echo "[!] Could not determine endpointId from /api/endpoints" >&2
+    exit 1
+  fi
+  echo "[*] Using endpointId: $ENDPOINT_ID"
+}
 
-# Determine endpointId (local docker environment)
-ENDPOINT_ID="$(curl -sS "$PORTAINER_URL/api/endpoints" -H "Authorization: Bearer $JWT" \
-  | jq -r '.[0].Id')"
+stack_id_by_name() {
+  local name="$1"
+  curl -sS "$PORTAINER_URL/api/stacks" -H "Authorization: Bearer $PJWT" \
+    | jq -r --arg n "$name" '.[] | select(.Name==$n) | .Id' | head -n 1
+}
 
-if [[ -z "$ENDPOINT_ID" || "$ENDPOINT_ID" == "null" ]]; then
-  echo "[!] Could not determine endpointId from /api/endpoints" >&2
-  exit 1
-fi
-echo "[*] Using endpointId: $ENDPOINT_ID"
+stack_delete_if_exists() {
+  local name="$1"
+  local sid
+  sid="$(stack_id_by_name "$name" || true)"
+  if [[ -n "${sid:-}" && "$sid" != "null" ]]; then
+    echo "[*] Deleting existing stack: $name (id=$sid)"
+    http_p DELETE "$PORTAINER_URL/api/stacks/$sid?endpointId=$ENDPOINT_ID" >/dev/null
+  fi
+}
 
-# ------------------------------------------------------------
-# Host dirs + network
-# ------------------------------------------------------------
+stack_create_repo() {
+  local name="$1"
+  local compose_path="$2"
+  local env_json="$3"
+
+  echo "[*] Creating repo stack: $name"
+  echo "    ref:  $REPO_REF"
+  echo "    file: $compose_path"
+
+  local payload
+  payload="$(jq -n \
+    --arg Name "$name" \
+    --arg RepositoryURL "$REPO_URL" \
+    --arg RepositoryReferenceName "$REPO_REF" \
+    --arg ComposeFilePathInRepository "$compose_path" \
+    --argjson Env "$env_json" \
+    '{
+      Name: $Name,
+      RepositoryURL: $RepositoryURL,
+      RepositoryReferenceName: $RepositoryReferenceName,
+      RepositoryAuthentication: false,
+      ComposeFilePathInRepository: $ComposeFilePathInRepository,
+      Env: $Env
+    }')"
+
+  http_p POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null
+}
+
+# -----------------------------
+# ThingsBoard helpers
+# -----------------------------
+tb_wait() {
+  echo "[*] Waiting for ThingsBoard API at $TB_HTTP ..."
+  until curl -fsS "$TB_HTTP/api/health" >/dev/null 2>&1; do sleep 3; done
+  echo "[*] ThingsBoard is reachable"
+}
+
+tb_login() {
+  echo "[*] Logging into ThingsBoard as tenant admin: $TB_TENANT_USER"
+  TB_JWT="$(curl -sS -X POST "$TB_HTTP/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg u "$TB_TENANT_USER" --arg p "$TB_TENANT_PASS" '{username:$u,password:$p}')" \
+    | jq -r .token)"
+  if [[ -z "$TB_JWT" || "$TB_JWT" == "null" ]]; then
+    echo "[!] ThingsBoard login failed. Check TB is up and creds are correct." >&2
+    exit 1
+  fi
+}
+
+tb_get_or_create_device_id() {
+  local dev_name="$1"
+  local dev_type="$2"
+
+  # Try lookup by name
+  local id
+  id="$(curl -sS "$TB_HTTP/api/tenant/devices?deviceName=$(python3 - <<PY
+import urllib.parse; print(urllib.parse.quote("$dev_name"))
+PY
+)" -H "X-Authorization: Bearer $TB_JWT" | jq -r '.id.id // empty' || true)"
+
+  if [[ -n "$id" ]]; then
+    echo "$id"
+    return 0
+  fi
+
+  # Create
+  id="$(curl -sS -X POST "$TB_HTTP/api/device" \
+    -H "Content-Type: application/json" \
+    -H "X-Authorization: Bearer $TB_JWT" \
+    -d "$(jq -n --arg n "$dev_name" --arg t "$dev_type" '{name:$n,type:$t}')" \
+    | jq -r '.id.id')"
+
+  if [[ -z "$id" || "$id" == "null" ]]; then
+    echo "[!] Failed to create device: $dev_name" >&2
+    exit 1
+  fi
+  echo "$id"
+}
+
+tb_get_token_for_device() {
+  local dev_id="$1"
+  local token
+  token="$(curl -sS "$TB_HTTP/api/device/$dev_id/credentials" \
+    -H "X-Authorization: Bearer $TB_JWT" | jq -r '.credentialsId')"
+  if [[ -z "$token" || "$token" == "null" ]]; then
+    echo "[!] Failed to read credentials for deviceId=$dev_id" >&2
+    exit 1
+  fi
+  echo "$token"
+}
+
+# -----------------------------
+# Host setup (dirs + configs + net)
+# -----------------------------
+echo "[*] Repo root: $REPO_ROOT"
+
+portainer_wait
+portainer_auth
+
 echo "[*] Creating host directories..."
 sudo mkdir -p \
   "$IOTLAB_DATA_ROOT/thingsboard/data" \
@@ -185,148 +238,117 @@ sudo mkdir -p \
   "$IOTLAB_ETC_ROOT/mosquitto"
 
 echo "[*] Ensuring docker network exists: $IOTLAB_NET"
-if docker network inspect "$IOTLAB_NET" >/dev/null 2>&1; then
-  echo "    already exists"
-else
-  docker network create "$IOTLAB_NET" >/dev/null
-  echo "    created"
-fi
+docker network inspect "$IOTLAB_NET" >/dev/null 2>&1 || docker network create "$IOTLAB_NET" >/dev/null
+echo "    ok"
 
-# ------------------------------------------------------------
-# Suricata: detect bridge interface + install config
-# ------------------------------------------------------------
+# Suricata iface + config
 SURICATA_IFACE="${SURICATA_IFACE:-}"
 if [[ -z "$SURICATA_IFACE" ]]; then
   SURICATA_IFACE="$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^br-' | head -n 1 || true)"
 fi
 if [[ -z "$SURICATA_IFACE" ]]; then
-  echo "[!] Could not auto-detect a br-* interface for Suricata. Set SURICATA_IFACE in .env" >&2
+  echo "[!] Could not auto-detect br-* interface. Set SURICATA_IFACE in .env" >&2
   exit 1
 fi
 echo "[*] Suricata capture interface: $SURICATA_IFACE"
-
-if [[ ! -f "$REPO_ROOT/configs/suricata/suricata.yaml" ]]; then
-  echo "[!] Missing $REPO_ROOT/configs/suricata/suricata.yaml" >&2
-  exit 1
-fi
 
 echo "[*] Installing Suricata config -> $IOTLAB_ETC_ROOT/suricata/suricata.yaml"
 sudo cp -f "$REPO_ROOT/configs/suricata/suricata.yaml" "$IOTLAB_ETC_ROOT/suricata/suricata.yaml"
 sudo sed -i "s/br-CHANGE-ME/$SURICATA_IFACE/g" "$IOTLAB_ETC_ROOT/suricata/suricata.yaml"
 
-# Mosquitto config must exist in repo
+# Mosquitto config
 if [[ ! -f "$REPO_ROOT/configs/mosquitto/mosquitto.conf" ]]; then
   echo "[!] Missing $REPO_ROOT/configs/mosquitto/mosquitto.conf" >&2
-  echo "    Create it, commit it, then rerun bootstrap." >&2
+  echo "    Create it (I gave you the content) then rerun." >&2
   exit 1
 fi
-
 echo "[*] Installing Mosquitto config -> $IOTLAB_ETC_ROOT/mosquitto/mosquitto.conf"
 sudo cp -f "$REPO_ROOT/configs/mosquitto/mosquitto.conf" "$IOTLAB_ETC_ROOT/mosquitto/mosquitto.conf"
 
-# ------------------------------------------------------------
-# Portainer stack create/update (repo stacks)
-# ------------------------------------------------------------
-create_repo_stack() {
-  local name="$1"
-  local compose_path="$2"
+# -----------------------------
+# Deploy core FIRST so TB is up (or recreate it cleanly)
+# -----------------------------
+ENV_BASE="$(jq -n \
+  --arg d "$IOTLAB_DATA_ROOT" --arg e "$IOTLAB_ETC_ROOT" --arg n "$IOTLAB_NET" \
+  '[
+    {name:"IOTLAB_DATA_ROOT", value:$d},
+    {name:"IOTLAB_ETC_ROOT",  value:$e},
+    {name:"IOTLAB_NET",       value:$n}
+  ]')"
 
-  for ref in "${REF_CANDIDATES[@]}"; do
-    echo "[*] Creating repo stack via Portainer: $name"
-    echo "    ref:   $ref"
-    echo "    file:  $compose_path"
+# Ensure core exists (create if missing)
+CORE_ID="$(stack_id_by_name "$STACK_CORE_NAME" || true)"
+if [[ -z "$CORE_ID" || "$CORE_ID" == "null" ]]; then
+  echo "[*] Deploying core stack first: $STACK_CORE_NAME"
+  stack_create_repo "$STACK_CORE_NAME" "$STACK_CORE_FILE" "$ENV_BASE"
+else
+  echo "[*] Core stack already exists (id=$CORE_ID)"
+fi
 
-    local payload
-    payload="$(jq -n \
-      --arg Name "$name" \
-      --arg RepositoryURL "$REPO_URL" \
-      --arg RepositoryReferenceName "$ref" \
-      --arg ComposePath "$compose_path" \
-      --arg IOTLAB_DATA_ROOT "$IOTLAB_DATA_ROOT" \
-      --arg IOTLAB_ETC_ROOT "$IOTLAB_ETC_ROOT" \
-      --arg IOTLAB_NET "$IOTLAB_NET" \
-      '{
-        Name: $Name,
-        RepositoryURL: $RepositoryURL,
-        RepositoryReferenceName: $RepositoryReferenceName,
-        RepositoryAuthentication: false,
-        ComposeFilePathInRepository: $ComposePath,
-        ComposeFile: $ComposePath,
-        Env: [
-          {name:"IOTLAB_DATA_ROOT", value:$IOTLAB_DATA_ROOT},
-          {name:"IOTLAB_ETC_ROOT",  value:$IOTLAB_ETC_ROOT},
-          {name:"IOTLAB_NET",       value:$IOTLAB_NET}
-        ]
-      }')"
+# -----------------------------
+# Create TB gateway devices + pull tokens
+# -----------------------------
+tb_wait
+tb_login
 
-    # try create
-    if http_portainer POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null; then
-      echo "[*] Created stack '$name' with ref '$ref'"
-      return 0
-    fi
+echo "[*] Ensuring gateway devices exist and pulling tokens..."
+CORE_GW_ID="$(tb_get_or_create_device_id "core-gateway" "gateway")"
+WIND_GW_ID="$(tb_get_or_create_device_id "windfarm-gateway" "gateway")"
+NUKE_GW_ID="$(tb_get_or_create_device_id "nuke-gateway" "gateway")"
 
-    # If ref not found, try next; if it's some other error, still try next (safe)
-    echo "[!] Create failed for '$name' with ref '$ref' — trying next ref..." >&2
-  done
+TB_GATEWAY_TOKEN_CORE="$(tb_get_token_for_device "$CORE_GW_ID")"
+TB_GATEWAY_TOKEN_WINDFARM="$(tb_get_token_for_device "$WIND_GW_ID")"
+TB_GATEWAY_TOKEN_NUKE="$(tb_get_token_for_device "$NUKE_GW_ID")"
 
-  echo "[!] All ref candidates failed for stack '$name'." >&2
-  return 1
-}
+echo "[*] Writing tokens to .env.generated (DO NOT COMMIT)"
+cat > "$REPO_ROOT/.env.generated" <<EOF
+TB_GATEWAY_TOKEN_CORE=$TB_GATEWAY_TOKEN_CORE
+TB_GATEWAY_TOKEN_WINDFARM=$TB_GATEWAY_TOKEN_WINDFARM
+TB_GATEWAY_TOKEN_NUKE=$TB_GATEWAY_TOKEN_NUKE
+EOF
 
+# -----------------------------
+# Recreate stacks that REQUIRE tokens (core/modbus/bacnet)
+# -----------------------------
+ENV_WITH_TOKENS="$(jq -n \
+  --arg d "$IOTLAB_DATA_ROOT" --arg e "$IOTLAB_ETC_ROOT" --arg n "$IOTLAB_NET" \
+  --arg t1 "$TB_GATEWAY_TOKEN_CORE" \
+  --arg t2 "$TB_GATEWAY_TOKEN_WINDFARM" \
+  --arg t3 "$TB_GATEWAY_TOKEN_NUKE" \
+  '[
+    {name:"IOTLAB_DATA_ROOT", value:$d},
+    {name:"IOTLAB_ETC_ROOT",  value:$e},
+    {name:"IOTLAB_NET",       value:$n},
+    {name:"TB_GATEWAY_TOKEN_CORE", value:$t1},
+    {name:"TB_GATEWAY_TOKEN_WINDFARM", value:$t2},
+    {name:"TB_GATEWAY_TOKEN_NUKE", value:$t3}
+  ]')"
 
-update_repo_stack() {
-  local name="$1"
-  local compose_path="$2"
+# Hard reset ONLY stacks that need tokens (and re-create them with Env)
+stack_delete_if_exists "$STACK_CORE_NAME"
+stack_delete_if_exists "$STACK_MODBUS_NAME"
+stack_delete_if_exists "$STACK_BACNET_NAME"
 
-  local id
-  id="$(get_stack_id_by_name "$name")"
-  if [[ -z "$id" || "$id" == "null" ]]; then
-    echo "[!] Can't update '$name' because it doesn't exist." >&2
-    return 1
-  fi
+echo "[*] Recreating token-dependent stacks..."
+stack_create_repo "$STACK_CORE_NAME"   "$STACK_CORE_FILE"   "$ENV_WITH_TOKENS"
+stack_create_repo "$STACK_MODBUS_NAME" "$STACK_MODBUS_FILE" "$ENV_WITH_TOKENS"
+stack_create_repo "$STACK_BACNET_NAME" "$STACK_BACNET_FILE" "$ENV_WITH_TOKENS"
 
-  # Update endpoint: PUT /api/stacks/{id}/git?endpointId=X
-  # payload keys are usually: RepositoryReferenceName + Env + AutoUpdate (optional)
-  local payload
-  payload="$(jq -n \
-    --arg RepositoryReferenceName "$REPO_REF_BRANCH" \
-    --arg IOTLAB_DATA_ROOT "$IOTLAB_DATA_ROOT" \
-    --arg IOTLAB_ETC_ROOT "$IOTLAB_ETC_ROOT" \
-    --arg IOTLAB_NET "$IOTLAB_NET" \
-    '{
-      RepositoryReferenceName: $RepositoryReferenceName,
-      Env: [
-        {name:"IOTLAB_DATA_ROOT", value:$IOTLAB_DATA_ROOT},
-        {name:"IOTLAB_ETC_ROOT",  value:$IOTLAB_ETC_ROOT},
-        {name:"IOTLAB_NET",       value:$IOTLAB_NET}
-      ],
-      PullImage: true
-    }')"
+# Remaining stacks
+MQTT_ID="$(stack_id_by_name "$STACK_MQTT_NAME" || true)"
+if [[ -z "$MQTT_ID" || "$MQTT_ID" == "null" ]]; then
+  stack_create_repo "$STACK_MQTT_NAME" "$STACK_MQTT_FILE" "$ENV_BASE"
+else
+  echo "[*] Stack already exists, skipping: $STACK_MQTT_NAME"
+fi
 
-  echo "[*] Updating existing repo stack: $name (id=$id)"
-  http_portainer PUT "$PORTAINER_URL/api/stacks/$id/git?endpointId=$ENDPOINT_ID" "$payload" >/dev/null
+MON_ID="$(stack_id_by_name "$STACK_MON_NAME" || true)"
+if [[ -z "$MON_ID" || "$MON_ID" == "null" ]]; then
+  stack_create_repo "$STACK_MON_NAME" "$STACK_MON_FILE" "$ENV_BASE"
+else
+  echo "[*] Stack already exists, skipping: $STACK_MON_NAME"
+fi
 
-  # Force immediate git redeploy (some builds require this endpoint)
-  echo "[*] Triggering git redeploy: $name"
-  http_portainer POST "$PORTAINER_URL/api/stacks/$id/git/redeploy?endpointId=$ENDPOINT_ID" "{}" >/dev/null || true
-}
-
-# ------------------------------------------------------------
-# Deploy all stacks (create or update)
-# ------------------------------------------------------------
-for item in "${STACKS[@]}"; do
-  name="${item%%:*}"
-  path="${item#*:}"
-
-  if stack_exists "$name"; then
-    if [[ "$UPDATE_EXISTING" == "1" ]]; then
-      update_repo_stack "$name" "$path"
-    else
-      echo "[*] Stack already exists, skipping: $name"
-    fi
-  else
-    create_repo_stack "$name" "$path"
-  fi
-done
-
-echo "[*] Done. Check Portainer UI for stack status."
+echo "[*] DONE."
+echo "    - Tokens saved to: $REPO_ROOT/.env.generated"
+echo "    - Open ThingsBoard UI and you should see gateway devices + telemetry shortly."
