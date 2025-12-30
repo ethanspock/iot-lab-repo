@@ -19,7 +19,8 @@ services:
 
   # One image, many instances (portable)
   temp_livingroom_01:
-    build: ./fake_sensor
+    build: 
+      context: ./fake_sensor
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
