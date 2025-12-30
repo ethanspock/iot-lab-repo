@@ -45,6 +45,14 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
   set +a
 fi
 
+# Normalize REPO_REF for Portainer: "refs/heads/main" -> "main"
+if [[ "${REPO_REF}" == refs/heads/* ]]; then
+  REPO_REF_BRANCH="${REPO_REF#refs/heads/}"
+else
+  REPO_REF_BRANCH="$REPO_REF"
+fi
+
+
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[!] Missing: $1" >&2; exit 1; }; }
 need_cmd curl
 need_cmd jq
@@ -173,28 +181,40 @@ create_repo_stack() {
     env_json="$(jq -c --arg k "$k" --arg v "$v" '. + [{name:$k, value:$v}]' <<<"$env_json")"
   done
 
+  # Portainer is annoyingly inconsistent across versions:
+  # - some use ComposeFilePathInRepository
+  # - some use ComposeFile
+  # - some need branch name not refs/heads/*
+  #
+  # We include BOTH keys, and we normalize the ref.
   local payload
   payload="$(jq -n \
     --arg Name "$name" \
     --arg RepositoryURL "$REPO_URL" \
-    --arg RepositoryReferenceName "$REPO_REF" \
-    --arg ComposeFilePathInRepository "$compose_path" \
+    --arg RepositoryReferenceName "$REPO_REF_BRANCH" \
+    --arg ComposePath "$compose_path" \
     --argjson Env "$env_json" \
     '{
       Name: $Name,
       RepositoryURL: $RepositoryURL,
       RepositoryReferenceName: $RepositoryReferenceName,
-      ComposeFilePathInRepository: $ComposeFilePathInRepository,
+      RepositoryAuthentication: false,
+      # Send both keys to handle Portainer schema differences
+      ComposeFilePathInRepository: $ComposePath,
+      ComposeFile: $ComposePath,
       Env: $Env
     }')"
 
-  http_portainer POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null
-}
+  echo "[*] Creating repo stack via Portainer: $name"
+  echo "    ref:   $REPO_REF_BRANCH"
+  echo "    file:  $compose_path"
 
-stack_exists() {
-  local name="$1"
-  curl -sS "$PORTAINER_URL/api/stacks" -H "Authorization: Bearer $PORTAINER_JWT" \
-    | jq -e --arg n "$name" '.[]? | select(.Name==$n)' >/dev/null 2>&1
+  # Create
+  if ! http_portainer POST "$PORTAINER_URL/api/stacks/create/standalone/repository?endpointId=$ENDPOINT_ID" "$payload" >/dev/null; then
+    echo "[!] Failed to create stack '$name'. Debug payload:" >&2
+    echo "$payload" | jq . >&2 || true
+    return 1
+  fi
 }
 
 # --- Deploy ThingsBoard core FIRST ---
