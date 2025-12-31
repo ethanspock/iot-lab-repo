@@ -7,8 +7,7 @@ networks:
 
 services:
   windmill_modbus_01:
-    build:
-      context: ./windmill_modbus
+    image: iotlab/windmill-modbus:local
     restart: unless-stopped
     networks: [lab]
     environment:
@@ -20,8 +19,7 @@ services:
       WIND_GUST_MS: 4.0
 
   windmill_modbus_02:
-    build:
-      context: ./windmill_modbus
+    image: iotlab/windmill-modbus:local
     restart: unless-stopped
     networks: [lab]
     environment:
@@ -33,8 +31,7 @@ services:
       WIND_GUST_MS: 5.0
 
   windmill_modbus_03:
-    build:
-      context: ./windmill_modbus
+    image: iotlab/windmill-modbus:local
     restart: unless-stopped
     networks: [lab]
     environment:
@@ -46,8 +43,7 @@ services:
       WIND_GUST_MS: 3.0
 
   windfarm_poller:
-    build:
-      context: ./windmill_poller
+    image: iotlab/windmill-poller:local
     restart: unless-stopped
     depends_on:
       - windmill_modbus_01

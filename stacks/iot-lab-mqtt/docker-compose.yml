@@ -10,8 +10,6 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     networks: [lab]
-      aliases:
-        - mosquitto
     ports:
       - "1883:1883"
     volumes:
@@ -21,8 +19,7 @@ services:
 
   # One image, many instances (portable)
   temp_livingroom_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -36,8 +33,7 @@ services:
       - INTERVAL=5
 
   temp_kitchen_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -51,8 +47,7 @@ services:
       - INTERVAL=6
 
   temp_bedroom_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -66,8 +61,7 @@ services:
       - INTERVAL=7
 
   temp_garage_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -81,8 +75,7 @@ services:
       - INTERVAL=8
 
   humidity_kitchen_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -96,8 +89,7 @@ services:
       - INTERVAL=10
 
   humidity_bathroom_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -111,8 +103,7 @@ services:
       - INTERVAL=12
 
   motion_frontdoor_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]
@@ -126,8 +117,7 @@ services:
       - INTERVAL=3
 
   motion_backyard_01:
-    build: 
-      context: ./fake_sensor
+    image: iotlab/fake-sensor:local
     restart: unless-stopped
     depends_on: [mosquitto]
     networks: [lab]

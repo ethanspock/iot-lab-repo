@@ -19,8 +19,7 @@ services:
       - ${IOTLAB_DATA_ROOT:-/opt/iot-lab}/thingsboard/logs:/var/log/thingsboard
 
   tb_bridge:
-    build:
-      context: ./tb-bridge
+    image: iotlab/tb-bridge:local
     restart: unless-stopped
     depends_on: [thingsboard]
     networks: [lab]
